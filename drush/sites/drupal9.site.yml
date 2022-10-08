@@ -1,4 +1,4 @@
 # @docksal Drush alias
 docksal:
   root: /var/www/docroot
-  uri: http://drupal9.docksal
+  uri: http://drupal9.docksal.site
