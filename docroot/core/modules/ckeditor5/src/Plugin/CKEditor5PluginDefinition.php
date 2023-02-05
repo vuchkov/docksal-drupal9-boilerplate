@@ -6,6 +6,7 @@ namespace Drupal\ckeditor5\Plugin;
 
 use Drupal\ckeditor5\HTMLRestrictions;
 use Drupal\Component\Assertion\Inspector;
+use Drupal\Component\Plugin\Definition\DerivablePluginDefinitionInterface;
 use Drupal\Component\Plugin\Definition\PluginDefinition;
 use Drupal\Component\Plugin\Definition\PluginDefinitionInterface;
 use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
@@ -16,7 +17,7 @@ use Drupal\Core\StringTranslation\TranslatableMarkup;
 /**
  * Provides an implementation of a CKEditor 5 plugin definition.
  */
-final class CKEditor5PluginDefinition extends PluginDefinition implements PluginDefinitionInterface {
+final class CKEditor5PluginDefinition extends PluginDefinition implements PluginDefinitionInterface, DerivablePluginDefinitionInterface {
 
   use SchemaCheckTrait;
 
@@ -40,22 +41,17 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
    * @param array $definition
    *   An array of values from the annotation/YAML.
    *
-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+   * @throws \InvalidArgumentException
    */
   public function __construct(array $definition) {
-    $this->id = $id = $definition['id'];
-
-    $expected_prefix = sprintf("%s_", $definition['provider']);
-    if (strpos($id, $expected_prefix) !== 0) {
-      throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition must have a plugin ID that starts with "%s".', $id, $expected_prefix));
+    foreach ($definition as $property => $value) {
+      if (property_exists($this, $property)) {
+        $this->{$property} = $value;
+      }
+      else {
+        throw new \InvalidArgumentException(sprintf('Property %s with value %s does not exist on %s.', $property, $value, __CLASS__));
+      }
     }
-    $this->provider = $definition['provider'];
-
-    static::validateCKEditor5Aspects($id, $definition);
-    $this->ckeditor5 = $definition['ckeditor5'];
-
-    $this->validateDrupalAspects($id, $definition);
-    $this->drupal = $definition['drupal'];
   }
 
   /**
@@ -81,14 +77,38 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
    *   The plugin definition to validate.
    *
    * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+   *
+   * @internal
+   * @see \Drupal\ckeditor5\Plugin\CKEditor5PluginManager::processDefinition()
    */
-  private static function validateCKEditor5Aspects(string $id, array $definition): void {
+  public static function validateCKEditor5Aspects(string $id, array $definition): void {
     if (!isset($definition['ckeditor5'])) {
       throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition must contain a "ckeditor5" key.', $id));
     }
 
     if (!isset($definition['ckeditor5']['plugins'])) {
       throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition must contain a "ckeditor5.plugins" key.', $id));
+    }
+
+    // Automatic link decorators make sense in CKEditor 5, where the generated
+    // HTML must be assumed to be served as-is. But it does not make sense in
+    // in Drupal, where we prefer not storing (hardcoding) such decisions in the
+    // database. Drupal instead filters it on output, using the filter system.
+    if (isset($definition['ckeditor5']['config']['link'])) {
+      // @see https://ckeditor.com/docs/ckeditor5/latest/api/module_link_link-LinkDecoratorAutomaticDefinition.html
+      if (isset($definition['ckeditor5']['config']['link']['decorators']) && is_array($definition['ckeditor5']['config']['link']['decorators'])) {
+        foreach ($definition['ckeditor5']['config']['link']['decorators'] as $decorator) {
+          if ($decorator['mode'] === 'automatic') {
+            throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition specifies an automatic decorator, this is not supported. Use the Drupal filter system instead.', $id));
+          }
+        }
+      }
+      // CKEditor 5 offers one preconfigured automatic link decorator under a
+      // special config flag.
+      // @see https://ckeditor.com/docs/ckeditor5/latest/api/module_link_link-LinkConfig.html#member-addTargetToExternalLinks
+      if (isset($definition['ckeditor5']['config']['link']['addTargetToExternalLinks']) && $definition['ckeditor5']['config']['link']['addTargetToExternalLinks']) {
+        throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition specifies an automatic decorator, this is not supported. Use the Drupal filter system instead.', $id));
+      }
     }
   }
 
@@ -101,8 +121,11 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
    *   The plugin definition to validate.
    *
    * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+   *
+   * @internal
+   * @see \Drupal\ckeditor5\Plugin\CKEditor5PluginManager::processDefinition()
    */
-  private function validateDrupalAspects(string $id, array $definition): void {
+  public function validateDrupalAspects(string $id, array $definition): void {
     if (!isset($definition['drupal'])) {
       throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition must contain a "drupal" key.', $id));
     }
@@ -122,27 +145,23 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
     if (!isset($definition['drupal']['elements'])) {
       throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition must contain a "drupal.elements" key.', $id));
     }
+    // ckeditor5_sourceEditing is the edge case here: it is the only plugin that
+    // is allowed to return a superset. It's a special case because it is
+    // through configuring this particular plugin that additional HTML tags can
+    // be allowed.
+    // The list of tags it supports is generated dynamically. In its default
+    // configuration it does support any HTML tags.
+    // @see \Drupal\ckeditor5\Plugin\CKEditor5PluginManager::getProvidedElements()
+    elseif ($definition['id'] === 'ckeditor5_sourceEditing') {
+      assert($definition['drupal']['elements'] === []);
+    }
     elseif ($definition['drupal']['elements'] !== FALSE && !(is_array($definition['drupal']['elements']) && !empty($definition['drupal']['elements']) && Inspector::assertAllStrings($definition['drupal']['elements']))) {
       throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition has a "drupal.elements" value that is neither a list of HTML tags/attributes nor false.', $id));
     }
     elseif (is_array($definition['drupal']['elements'])) {
       foreach ($definition['drupal']['elements'] as $index => $element) {
-        // ckeditor5_sourceEditing is the edge case here: it is the only plugin
-        // that is allowed to return a superset. It's a special case because it
-        // is through configuring this particular plugin that additional HTML
-        // tags can be allowed.
-        // Even though its plugin definition says '<*>' is supported, this is a
-        // little lie to convey that this plugin is capable of supporting any
-        // HTML tag … but which ones are actually supported depends on the
-        // configuration.
-        // This also means that without any configuration, it does not support
-        // any HTML tags.
-        // @see \Drupal\ckeditor5\Plugin\CKEditor5PluginManager::getProvidedElements()
-        if ($definition['id'] === 'ckeditor5_sourceEditing') {
-          continue;
-        }
         $parsed = HTMLRestrictions::fromString($element);
-        if ($parsed->isEmpty()) {
+        if ($parsed->allowsNothing()) {
           throw new InvalidPluginDefinitionException($id, sprintf('The "%s" CKEditor 5 plugin definition has a value at "drupal.elements.%d" that is not an HTML tag with optional attributes: "%s". Expected structure: "<tag allowedAttribute="allowedValue1 allowedValue2">".', $id, $index, $element));
         }
         if (count($parsed->getAllowedElements()) > 1) {
@@ -288,6 +307,31 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
   }
 
   /**
+   * {@inheritdoc}
+   *
+   * @see \Drupal\ckeditor5\Annotation\DrupalAspectsOfCKEditor5Plugin::$deriver
+   */
+  public function getDeriver() {
+    // TRICKY: this is the only key that is allowed to not be set, because it is
+    // possible that this plugin definition is a partial/incomplete one, and the
+    // default from the annotation is only applied automatically for class
+    // annotation CKEditor 5 plugin definitions (because they create an instance
+    // of the DrupalAspectsOfCKEditor5Plugin annotation level), not for CKEditor
+    // 5 plugin definitions in YAML.
+    // @see \Drupal\ckeditor5\Plugin\CKEditor5PluginManager::processDefinition()
+    // @see \Drupal\ckeditor5\Annotation\CKEditor5Plugin::__construct()
+    return $this->drupal['deriver'] ?? NULL;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function setDeriver($deriver) {
+    $this->drupal['deriver'] = $deriver;
+    return $this;
+  }
+
+  /**
    * Whether this plugin is configurable by the user.
    *
    * @return bool
@@ -427,14 +471,55 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
   /**
    * Gets the list of elements and attributes this plugin allows to create/edit.
    *
-   * @return string[]|false
-   *   FALSE if this plugin does not create/edit any elements or attributes.
-   *   Otherwise a list.
+   * @return string[]
+   *   A list of elements and attributes.
+   *
+   * @see \Drupal\ckeditor5\Annotation\DrupalAspectsOfCKEditor5Plugin::$elements
+   *
+   * @throws \LogicException
+   *   When called on a plugin definition that has no elements.
+   */
+  public function getElements(): array {
+    if (!$this->hasElements()) {
+      throw new \LogicException('::getElements() should only be called if ::hasElements() returns TRUE.');
+    }
+    return $this->drupal['elements'];
+  }
+
+  /**
+   * Gets the elements this plugin allows to create.
+   *
+   * @return string[]
+   *   A list of plain tags (without attributes) that this plugin can create.
+   *
+   * @see \Drupal\ckeditor5\Annotation\DrupalAspectsOfCKEditor5Plugin::$elements
+   *
+   * @throws \LogicException
+   *   When called on a plugin definition that has no elements.
+   */
+  public function getCreatableElements(): array {
+    if (!$this->hasElements()) {
+      throw new \LogicException('::getCreatableElements() should only be called if ::hasElements() returns TRUE.');
+    }
+
+    return array_filter($this->getElements(), [__CLASS__, 'isCreatableElement']);
+  }
+
+  /**
+   * Checks if the element is a plain tag, meaning the plugin can create it.
+   *
+   * @param string $element
+   *   A single element, for example `<foo>`, `<foo bar>` or `<foo bar="baz'>`.
+   *
+   * @return bool
+   *   If it is a plain tag and hence a creatable element.
    *
    * @see \Drupal\ckeditor5\Annotation\DrupalAspectsOfCKEditor5Plugin::$elements
    */
-  public function getElements() {
-    return $this->drupal['elements'];
+  public static function isCreatableElement(string $element): bool {
+    return !HTMLRestrictions::fromString($element)
+      ->getPlainTagsSubset()
+      ->allowsNothing();
   }
 
   /**
@@ -445,7 +530,7 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
    * @see \Drupal\ckeditor5\Annotation\DrupalAspectsOfCKEditor5Plugin::$elements
    */
   public function hasElements(): bool {
-    return $this->getElements() !== FALSE;
+    return $this->drupal['elements'] !== FALSE;
   }
 
   /**
@@ -472,7 +557,7 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
   }
 
   /**
-   * Gets keyed array of additional values for the CKEditor5 constructor config.
+   * Gets keyed array of additional values for the CKEditor 5 configuration.
    *
    * @return array
    *   The CKEditor 5 constructor config.
@@ -484,7 +569,7 @@ final class CKEditor5PluginDefinition extends PluginDefinition implements Plugin
   }
 
   /**
-   * Whether this plugin has additional values for the CKEditor5 constructor.
+   * Whether this plugin has additional values for the CKEditor 5 configuration.
    *
    * @return bool
    *

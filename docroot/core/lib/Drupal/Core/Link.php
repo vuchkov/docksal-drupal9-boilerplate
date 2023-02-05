@@ -19,10 +19,12 @@ class Link implements RenderableInterface {
 
   /**
    * The link text for the anchor tag as a translated string or render array.
+   *
    * Strings will be sanitized automatically. If you need to output HTML in
    * the link text, use a render array or an already sanitized string such as
    * the output of \Drupal\Component\Utility\Xss::filter() or
    * \Drupal\Component\Render\FormattableMarkup.
+   *
    * @var string|array|\Drupal\Component\Render\MarkupInterface
    */
   protected $text;
@@ -44,7 +46,7 @@ class Link implements RenderableInterface {
    *   the output of \Drupal\Component\Utility\Xss::filter() or
    *   \Drupal\Component\Render\FormattableMarkup.
    * @param \Drupal\Core\Url $url
-   *   The url object.
+   *   The \Drupal\Core\Url object.
    */
   public function __construct($text, Url $url) {
     $this->text = $text;

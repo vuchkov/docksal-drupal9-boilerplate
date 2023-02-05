@@ -160,7 +160,7 @@ function editingDowncastMediaLink() {
             // element which makes caused re-render of the media preview, making
             // the media preview flicker once when media is unlinked.
             // @todo ensure that this doesn't cause flickering after
-            //   https://www.drupal.org/i/3246380 has been addressed.
+            //   https://www.drupal.org/i/3304834 has been addressed.
             writer.move(
               writer.createRangeIn(linkInMedia),
               writer.createPositionAt(mediaContainer, 0),
@@ -319,7 +319,7 @@ function upcastMediaLinkManualDecorator(editor, decorator) {
 /**
  * Model to view and view to model conversions for linked media elements.
  *
- * @internal
+ * @private
  *
  * @see https://github.com/ckeditor/ckeditor5/blob/v31.0.0/packages/ckeditor5-link/src/linkimage.js
  */
@@ -352,6 +352,13 @@ export default class DrupalLinkMediaEditing extends Plugin {
     editor.conversion.for('dataDowncast').add(dataDowncastMediaLink());
 
     this._enableManualDecorators();
+
+    const linkCommand = editor.commands.get('link');
+    if (linkCommand.automaticDecorators.length > 0) {
+      throw new Error(
+        'The Drupal Media plugin is not compatible with automatic link decorators. To use Drupal Media, disable any plugins providing automatic link decorators.',
+      );
+    }
   }
 
   /**

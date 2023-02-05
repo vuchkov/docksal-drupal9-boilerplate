@@ -42,8 +42,8 @@ class BulkFormTest extends NodeTestBase {
   /**
    * {@inheritdoc}
    */
-  protected function setUp($import_test_views = TRUE): void {
-    parent::setUp($import_test_views);
+  protected function setUp($import_test_views = TRUE, $modules = ['node_test_views']): void {
+    parent::setUp($import_test_views, $modules);
 
     ConfigurableLanguage::createFromLangcode('en-gb')->save();
     ConfigurableLanguage::createFromLangcode('it')->save();
@@ -68,7 +68,7 @@ class BulkFormTest extends NodeTestBase {
       foreach ($langcodes as $langcode) {
         if (!$node->hasTranslation($langcode)) {
           $title = $this->randomMachineName() . ' [' . $node->id() . ':' . $langcode . ']';
-          $translation = $node->addTranslation($langcode, ['title' => $title, 'promote' => FALSE]);
+          $node->addTranslation($langcode, ['title' => $title, 'promote' => FALSE]);
         }
       }
       $node->save();
@@ -78,7 +78,7 @@ class BulkFormTest extends NodeTestBase {
     $node = $this->nodes[2];
     $langcode = 'en';
     $title = $this->randomMachineName() . ' [' . $node->id() . ':' . $langcode . ']';
-    $translation = $node->addTranslation($langcode, ['title' => $title]);
+    $node->addTranslation($langcode, ['title' => $title]);
     $node->save();
 
     // Check that all created translations are selected by the test view.

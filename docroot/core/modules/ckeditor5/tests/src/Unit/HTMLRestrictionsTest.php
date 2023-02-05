@@ -91,6 +91,10 @@ class HTMLRestrictionsTest extends UnitTestCase {
       ['foo' => ['baz' => TRUE], 'bar' => ['qux' => ['a', 'b']]],
       'The "bar" HTML tag has attribute restriction "qux", but it is not an array of key-value pairs, with HTML tag attribute values as keys and TRUE as values.',
     ];
+    yield 'INVALID: keys valid, values invalid attribute restrictions due to broad wildcard instead of prefix/infix/suffix wildcard allowed attribute value' => [
+      ['foo' => ['bar' => ['*' => TRUE]]],
+      'The "foo" HTML tag has an attribute restriction "bar" with a "*" allowed attribute value. This implies all attributes values are allowed. Remove the attribute value restriction instead, or use a prefix (`*-foo`), infix (`*-foo-*`) or suffix (`foo-*`) wildcard restriction instead.',
+    ];
 
     // Valid values.
     yield 'VALID: keys valid, boolean attribute restriction values: also valid' => [
@@ -101,16 +105,62 @@ class HTMLRestrictionsTest extends UnitTestCase {
       ['foo' => ['baz' => TRUE], 'bar' => ['qux' => ['a' => TRUE, 'b' => TRUE]]],
       NULL,
     ];
+
+    // Invalid global attribute `*` HTML tag restrictions.
+    yield 'INVALID: global attribute tag allowing no attributes' => [
+      ['*' => FALSE],
+      'The value for the special "*" global attribute HTML tag must be an array of attribute restrictions.',
+    ];
+    yield 'INVALID: global attribute tag allowing any attribute' => [
+      ['*' => TRUE],
+      'The value for the special "*" global attribute HTML tag must be an array of attribute restrictions.',
+    ];
+
+    // Valid global attribute `*` HTML tag restrictions.
+    yield 'VALID: global attribute tag with attribute allowed' => [
+      ['*' => ['foo' => TRUE]],
+      NULL,
+    ];
+    yield 'VALID: global attribute tag with attribute forbidden' => [
+      ['*' => ['foo' => FALSE]],
+      NULL,
+    ];
+    yield 'VALID: global attribute tag with attribute allowed, specific attribute values allowed' => [
+      ['*' => ['foo' => ['a' => TRUE, 'b' => TRUE]]],
+      NULL,
+    ];
+    yield 'VALID BUT NOT YET SUPPORTED: global attribute tag with attribute allowed, specific attribute values forbidden' => [
+      ['*' => ['foo' => ['a' => FALSE, 'b' => FALSE]]],
+      'The "*" HTML tag has attribute restriction "foo", but it is not an array of key-value pairs, with HTML tag attribute values as keys and TRUE as values.',
+    ];
+
+    // Invalid overrides of globally disallowed attributes.
+    yield 'INVALID: <foo bar> when "bar" is globally disallowed' => [
+      ['foo' => ['bar' => TRUE], '*' => ['bar' => FALSE, 'baz' => TRUE]],
+      'The attribute restrictions in "<foo bar>" are allowing attributes "bar" that are disallowed by the special "*" global attribute restrictions',
+    ];
+    yield 'INVALID: <foo style> when "style" is globally disallowed' => [
+      ['foo' => ['style' => TRUE], '*' => ['bar' => FALSE, 'baz' => TRUE, 'style' => FALSE]],
+      'The attribute restrictions in "<foo style>" are allowing attributes "bar", "style" that are disallowed by the special "*" global attribute restrictions',
+    ];
+    yield 'INVALID: <foo on*> when "on*" is globally disallowed' => [
+      ['foo' => ['on*' => TRUE], '*' => ['bar' => FALSE, 'baz' => TRUE, 'style' => FALSE, 'on*' => FALSE]],
+      'The attribute restrictions in "<foo on*>" are allowing attributes "bar", "style", "on*" that are disallowed by the special "*" global attribute restrictions',
+    ];
+    yield 'INVALID: <foo ontouch> when "on" is globally disallowed' => [
+      ['foo' => ['ontouch' => TRUE], '*' => ['bar' => FALSE, 'baz' => TRUE, 'style' => FALSE, 'on*' => FALSE]],
+      'The attribute restrictions in "<foo ontouch>" are allowing attributes "bar", "style", "on*" that are disallowed by the special "*" global attribute restrictions',
+    ];
   }
 
   /**
-   * @covers ::isEmpty()
+   * @covers ::allowsNothing()
    * @covers ::getAllowedElements()
    * @dataProvider providerCounting
    */
   public function testCounting(array $elements, bool $expected_is_empty, int $expected_concrete_only_count, int $expected_concrete_plus_wildcard_count): void {
     $r = new HTMLRestrictions($elements);
-    $this->assertSame($expected_is_empty, $r->isEmpty());
+    $this->assertSame($expected_is_empty, $r->allowsNothing());
     $this->assertCount($expected_concrete_only_count, $r->getAllowedElements());
     $this->assertCount($expected_concrete_only_count, $r->getAllowedElements(TRUE));
     $this->assertCount($expected_concrete_plus_wildcard_count, $r->getAllowedElements(FALSE));
@@ -124,25 +174,46 @@ class HTMLRestrictionsTest extends UnitTestCase {
       0,
     ];
 
-    yield 'one' => [
+    yield 'one concrete tag' => [
       ['a' => TRUE],
       FALSE,
       1,
       1,
     ];
 
-    yield 'two' => [
+    yield 'one wildcard tag: considered to allow nothing because no concrete tag to resolve onto' => [
+      ['$text-container' => ['class' => ['text-align-left' => TRUE]]],
+      FALSE,
+      0,
+      1,
+    ];
+
+    yield 'two concrete tags' => [
       ['a' => TRUE, 'b' => FALSE],
       FALSE,
       2,
       2,
     ];
 
-    yield 'two of which one is a wildcard' => [
-      ['a' => TRUE, '$text-container' => FALSE],
+    yield 'one concrete tag, one wildcard tag' => [
+      ['a' => TRUE, '$text-container' => ['class' => ['text-align-left' => TRUE]]],
       FALSE,
       1,
       2,
+    ];
+
+    yield 'only globally allowed attribute: considered to allow something' => [
+      ['*' => ['lang' => TRUE]],
+      FALSE,
+      1,
+      1,
+    ];
+
+    yield 'only globally forbidden attribute: considered to allow nothing' => [
+      ['*' => ['style' => FALSE]],
+      TRUE,
+      1,
+      1,
     ];
   }
 
@@ -167,21 +238,22 @@ class HTMLRestrictionsTest extends UnitTestCase {
     $this->assertSame($expected, HTMLRestrictions::fromTextFormat($text_format->reveal())->getAllowedElements());
     $this->assertSame($expected_raw, HTMLRestrictions::fromTextFormat($text_format->reveal())->getAllowedElements(FALSE));
 
+    // @see \Drupal\filter\Plugin\Filter\FilterHtml::getHTMLRestrictions()
+    $filter_html_additional_expectations = [
+      '*' => [
+        'style' => FALSE,
+        'on*' => FALSE,
+        'lang' => TRUE,
+        'dir' => ['ltr' => TRUE, 'rtl' => TRUE],
+      ],
+    ];
     // ::fromFilterPluginInstance()
     $filter_plugin_instance = $this->prophesize(FilterInterface::class);
     $filter_plugin_instance->getHTMLRestrictions()->willReturn([
-      'allowed' => $expected_raw + [
-        // @see \Drupal\filter\Plugin\Filter\FilterHtml::getHTMLRestrictions()
-        '*' => [
-          'style' => FALSE,
-          'on*' => FALSE,
-          'lang' => TRUE,
-          'dir' => ['ltr' => TRUE, 'rtl' => TRUE],
-        ],
-      ],
+      'allowed' => $expected_raw + $filter_html_additional_expectations,
     ]);
-    $this->assertSame($expected, HTMLRestrictions::fromFilterPluginInstance($filter_plugin_instance->reveal())->getAllowedElements());
-    $this->assertSame($expected_raw, HTMLRestrictions::fromFilterPluginInstance($filter_plugin_instance->reveal())->getAllowedElements(FALSE));
+    $this->assertSame($expected + $filter_html_additional_expectations, HTMLRestrictions::fromFilterPluginInstance($filter_plugin_instance->reveal())->getAllowedElements());
+    $this->assertSame($expected_raw + $filter_html_additional_expectations, HTMLRestrictions::fromFilterPluginInstance($filter_plugin_instance->reveal())->getAllowedElements(FALSE));
   }
 
   public function providerConvenienceConstructors(): \Generator {
@@ -226,6 +298,10 @@ class HTMLRestrictionsTest extends UnitTestCase {
       '<a target>',
       ['a' => ['target' => TRUE]],
     ];
+    yield 'tag with single attribute allowing any value unnecessarily explicitly' => [
+      '<a target="*">',
+      ['a' => ['target' => TRUE]],
+    ];
     yield 'tag with single attribute allowing single specific value' => [
       '<a target="_blank">',
       ['a' => ['target' => ['_blank' => TRUE]]],
@@ -242,6 +318,34 @@ class HTMLRestrictionsTest extends UnitTestCase {
       '<a target class>',
       ['a' => ['target' => TRUE, 'class' => TRUE]],
     ];
+    yield 'tag with allowed attribute value that happen to be numbers' => [
+      '<ol type="1 A I">',
+      ['ol' => ['type' => [1 => TRUE, 'A' => TRUE, 'I' => TRUE]]],
+    ];
+    yield 'tag with allowed attribute value that happen to be numbers (reversed)' => [
+      '<ol type="I A 1">',
+      ['ol' => ['type' => ['I' => TRUE, 'A' => TRUE, 1 => TRUE]]],
+    ];
+    yield 'tag with two attributes, spread across declarations' => [
+      '<a target> <a class>',
+      ['a' => ['target' => TRUE, 'class' => TRUE]],
+    ];
+    yield 'tag with conflicting attribute config, allow one attribute and forbid all attributes' => [
+      '<a target> <a>',
+      ['a' => ['target' => TRUE]],
+    ];
+    yield 'tag with conflicting attribute config, allow one attribute and allow all attributes' => [
+      '<a *> <a target>',
+      ['a' => TRUE],
+    ];
+    yield 'tag attribute configuration spread across declarations' => [
+      '<a target="_blank"> <a target="_self"> <a target="_*">',
+      ['a' => ['target' => ['_blank' => TRUE, '_self' => TRUE, '_*' => TRUE]]],
+    ];
+    yield 'tag attribute configuration spread across declarations, allow all attributes values' => [
+      '<a target> <a target="_blank"> <a target="_self"> <a target="_*">',
+      ['a' => ['target' => TRUE]],
+    ];
 
     // Multiple tag cases.
     yield 'two tags' => [
@@ -249,13 +353,27 @@ class HTMLRestrictionsTest extends UnitTestCase {
       ['a' => FALSE, 'p' => FALSE],
     ];
     yield 'two tags (reverse order)' => [
-      '<a> <p>',
-      ['a' => FALSE, 'p' => FALSE],
+      '<p> <a>',
+      ['p' => FALSE, 'a' => FALSE],
     ];
 
     // Wildcard tag, attribute and attribute value.
     yield '$text-container' => [
       '<$text-container class="text-align-left text-align-center text-align-right text-align-justify">',
+      [],
+      [
+        '$text-container' => [
+          'class' => [
+            'text-align-left' => TRUE,
+            'text-align-center' => TRUE,
+            'text-align-right' => TRUE,
+            'text-align-justify' => TRUE,
+          ],
+        ],
+      ],
+    ];
+    yield '$text-container, with attribute values spread across declarations' => [
+      '<$text-container class="text-align-left"> <$text-container class="text-align-center"> <$text-container class="text-align-right"> <$text-container class="text-align-justify">',
       [],
       [
         '$text-container' => [
@@ -406,6 +524,105 @@ class HTMLRestrictionsTest extends UnitTestCase {
     yield '<h2 id="jump-*">' => [
       '<h2 id="jump-*">',
       ['h2' => ['id' => ['jump-*' => TRUE]]],
+    ];
+
+    // Attribute restrictions that match the global attribute restrictions
+    // should be omitted from concrete tags.
+    yield '<p> <* foo>' => [
+      '<p> <* foo>',
+      ['p' => FALSE, '*' => ['foo' => TRUE]],
+    ];
+    yield '<p foo> <* foo> results in <p> getting simplified' => [
+      '<p foo> <* foo>',
+      ['p' => FALSE, '*' => ['foo' => TRUE]],
+    ];
+    yield '<* foo> <p foo> results in <p> getting simplified' => [
+      '<* foo> <p foo>',
+      ['p' => FALSE, '*' => ['foo' => TRUE]],
+    ];
+    yield '<p foo bar> <* foo> results in <p> getting simplified' => [
+      '<p foo bar> <* foo>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => TRUE]],
+    ];
+    yield '<* foo> <p foo bar> results in <p> getting simplified' => [
+      '<* foo> <p foo bar>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => TRUE]],
+    ];
+    yield '<p foo="a b"> + <* foo="b a"> results in <p> getting simplified' => [
+      '<p foo="a b"> <* foo="b a">',
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p foo="a b"> results in <p> getting simplified' => [
+      '<* foo="b a"> <p foo="a b">',
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<p foo="a b" bar> + <* foo="b a"> results in <p> getting simplified' => [
+      '<p foo="a b" bar> <* foo="b a">',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p foo="a b" bar> results in <p> getting simplified' => [
+      '<* foo="b a"> <p foo="a b" bar>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<p foo="a b c"> + <* foo="b a"> results in <p> getting simplified' => [
+      '<p foo="a b c"> <* foo="b a">',
+      ['p' => ['foo' => ['c' => TRUE]], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p foo="a b c"> results in <p> getting simplified' => [
+      '<* foo="b a"> <p foo="a b c">',
+      ['p' => ['foo' => ['c' => TRUE]], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    // Attribute restrictions that match the global attribute restrictions
+    // should be omitted from wildcard tags.
+    yield '<p> <$text-container foo> <* foo> results in <$text-container> getting simplified' => [
+      '<p> <$text-container foo> <* foo>',
+      ['p' => FALSE, '*' => ['foo' => TRUE]],
+      ['p' => FALSE, '$text-container' => FALSE, '*' => ['foo' => TRUE]],
+    ];
+    yield '<* foo> <text-container foo> <p> results in <$text-container> getting stripped' => [
+      '<* foo> <p> <$text-container foo>',
+      ['p' => FALSE, '*' => ['foo' => TRUE]],
+      ['p' => FALSE, '*' => ['foo' => TRUE], '$text-container' => FALSE],
+    ];
+    yield '<p> <$text-container foo bar> <* foo> results in <$text-container> getting simplified' => [
+      '<p> <$text-container foo bar> <* foo>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => TRUE]],
+      ['p' => FALSE, '$text-container' => ['bar' => TRUE], '*' => ['foo' => TRUE]],
+    ];
+    yield '<* foo> <$text-container foo bar> <p> results in <$text-container> getting simplified' => [
+      '<* foo> <$text-container foo bar> <p>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => TRUE]],
+      ['p' => FALSE, '*' => ['foo' => TRUE], '$text-container' => ['bar' => TRUE]],
+    ];
+    yield '<p> <$text-container foo="a b"> + <* foo="b a"> results in <$text-container> getting simplified' => [
+      '<p> <$text-container foo="a b"> <* foo="b a">',
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '$text-container' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p> <$text-container foo="a b"> results in <$text-container> getting simplified' => [
+      '<* foo="b a"> <p> <$text-container foo="a b">',
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]], '$text-container' => FALSE],
+    ];
+    yield '<p> <$text-container foo="a b" bar> + <* foo="b a"> results in <$text-container> getting simplified' => [
+      '<p> <$text-container foo="a b" bar> <* foo="b a">',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '$text-container' => ['bar' => TRUE], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p> <$text-container foo="a b" bar> results in <$text-container> getting simplified' => [
+      '<* foo="b a"> <p> <$text-container foo="a b" bar>',
+      ['p' => ['bar' => TRUE], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]], '$text-container' => ['bar' => TRUE]],
+    ];
+    yield '<p> <$text-container foo="a b c"> + <* foo="b a"> results in <$text-container> getting simplified' => [
+      '<p> <$text-container foo="a b c"> <* foo="b a">',
+      ['p' => ['foo' => ['c' => TRUE]], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '$text-container' => ['foo' => ['c' => TRUE]], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+    ];
+    yield '<* foo="b a"> <p> <$text-container foo="a b c"> results in <$text-container> getting simplified' => [
+      '<* foo="b a"> <p> <$text-container foo="a b c">',
+      ['p' => ['foo' => ['c' => TRUE]], '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]]],
+      ['p' => FALSE, '*' => ['foo' => ['b' => TRUE, 'a' => TRUE]], '$text-container' => ['foo' => ['c' => TRUE]]],
     ];
   }
 
@@ -623,6 +840,27 @@ class HTMLRestrictionsTest extends UnitTestCase {
               'value' => [
                 'regexp' => [
                   'pattern' => '/^(jump-.*)$/',
+                ],
+              ],
+            ],
+          ],
+        ],
+      ],
+    ];
+
+    yield '<ol type="1 A">' => [
+      new HTMLRestrictions(['ol' => ['type' => ['1' => TRUE, 'A' => TRUE]]]),
+      ['<ol type="1 A">'],
+      '<ol type="1 A">',
+      [
+        [
+          'name' => 'ol',
+          'attributes' => [
+            [
+              'key' => 'type',
+              'value' => [
+                'regexp' => [
+                  'pattern' => '/^(1|A)$/',
                 ],
               ],
             ],
@@ -850,9 +1088,44 @@ class HTMLRestrictionsTest extends UnitTestCase {
     yield 'attribute restrictions are different: <a hreflang=*> vs <a hreflang="en"> — vice versa' => [
       'a' => new HTMLRestrictions(['a' => ['hreflang' => ['en' => TRUE]]]),
       'b' => new HTMLRestrictions(['a' => ['hreflang' => TRUE]]),
-      'diff' => 'a',
+      'diff' => HTMLRestrictions::emptySet(),
       'intersection' => 'a',
       'union' => 'b',
+    ];
+    yield 'attribute restrictions are different: <ol type=*> vs <ol type="A">' => [
+      'a' => new HTMLRestrictions(['ol' => ['type' => TRUE]]),
+      'b' => new HTMLRestrictions(['ol' => ['type' => ['A' => TRUE]]]),
+      'diff' => 'a',
+      'intersection' => 'b',
+      'union' => 'a',
+    ];
+    yield 'attribute restrictions are different: <ol type=*> vs <ol type="A"> — vice versa' => [
+      'b' => new HTMLRestrictions(['ol' => ['type' => ['A' => TRUE]]]),
+      'a' => new HTMLRestrictions(['ol' => ['type' => TRUE]]),
+      'diff' => HTMLRestrictions::emptySet(),
+      'intersection' => 'a',
+      'union' => 'b',
+    ];
+    yield 'attribute restrictions are different: <ol type=*> vs <ol type="1">' => [
+      'a' => new HTMLRestrictions(['ol' => ['type' => TRUE]]),
+      'b' => new HTMLRestrictions(['ol' => ['type' => ['1' => TRUE]]]),
+      'diff' => 'a',
+      'intersection' => 'b',
+      'union' => 'a',
+    ];
+    yield 'attribute restrictions are different: <ol type=*> vs <ol type="1"> — vice versa' => [
+      'b' => new HTMLRestrictions(['ol' => ['type' => ['1' => TRUE]]]),
+      'a' => new HTMLRestrictions(['ol' => ['type' => TRUE]]),
+      'diff' => HTMLRestrictions::emptySet(),
+      'intersection' => 'a',
+      'union' => 'b',
+    ];
+    yield 'attribute restrictions are the same: <ol type="1"> vs <ol type="1">' => [
+      'a' => new HTMLRestrictions(['ol' => ['type' => ['1' => TRUE]]]),
+      'b' => new HTMLRestrictions(['ol' => ['type' => ['1' => TRUE]]]),
+      'diff' => HTMLRestrictions::emptySet(),
+      'intersection' => 'a',
+      'union' => 'a',
     ];
 
     // Complex cases.
@@ -969,6 +1242,20 @@ class HTMLRestrictionsTest extends UnitTestCase {
       'diff' => HTMLRestrictions::emptySet(),
       'intersection' => new HTMLRestrictions(['$text-container' => ['class' => TRUE], 'p' => ['class' => TRUE]]),
       'union' => 'b',
+    ];
+    yield 'wildcard + matching tag: wildcard resolves into matching tag, but matching tag already supports all attributes' => [
+      'a' => new HTMLRestrictions(['p' => TRUE]),
+      'b' => new HTMLRestrictions(['$text-container' => ['class' => ['foo' => TRUE, 'bar' => TRUE]]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['p' => TRUE, '$text-container' => ['class' => ['foo' => TRUE, 'bar' => TRUE]]]),
+    ];
+    yield 'wildcard + matching tag: wildcard resolves into matching tag, but matching tag already supports all attributes — vice versa' => [
+      'a' => new HTMLRestrictions(['$text-container' => ['class' => ['foo' => TRUE, 'bar' => TRUE]]]),
+      'b' => new HTMLRestrictions(['p' => TRUE]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['p' => TRUE, '$text-container' => ['class' => ['foo' => TRUE, 'bar' => TRUE]]]),
     ];
 
     // Wildcard tag + non-matching tag cases.
@@ -1111,20 +1398,116 @@ class HTMLRestrictionsTest extends UnitTestCase {
         'union' => 'b',
       ];
     }
+
+    // Global attribute `*` HTML tag + global attribute `*` HTML tag cases.
+    yield 'global attribute tag + global attribute tag: no overlap in attributes' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'b' => new HTMLRestrictions(['*' => ['baz' => FALSE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'baz' => FALSE]]),
+    ];
+    yield 'global attribute tag + global attribute tag: no overlap in attributes — vice versa' => [
+      'a' => new HTMLRestrictions(['*' => ['baz' => FALSE]]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'baz' => FALSE]]),
+    ];
+    yield 'global attribute tag + global attribute tag: overlap in attributes, same attribute value restrictions' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'b' => new HTMLRestrictions(['*' => ['bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'diff' => new HTMLRestrictions(['*' => ['foo' => TRUE]]),
+      'intersection' => 'b',
+      'union' => 'a',
+    ];
+    yield 'global attribute tag + global attribute tag: overlap in attributes, same attribute value restrictions — vice versa' => [
+      'a' => new HTMLRestrictions(['*' => ['bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'diff' => HTMLRestrictions::emptySet(),
+      'intersection' => 'a',
+      'union' => 'b',
+    ];
+    yield 'global attribute tag + global attribute tag: overlap in attributes, different attribute value restrictions' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'b' => new HTMLRestrictions(['*' => ['bar' => TRUE, 'dir' => TRUE, 'foo' => FALSE]]),
+      'diff' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'intersection' => new HTMLRestrictions(['*' => ['bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE], 'foo' => FALSE]]),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => TRUE, 'dir' => TRUE]]),
+    ];
+    yield 'global attribute tag + global attribute tag: overlap in attributes, different attribute value restrictions — vice versa' => [
+      'a' => new HTMLRestrictions(['*' => ['bar' => TRUE, 'dir' => TRUE, 'foo' => FALSE]]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      'diff' => 'a',
+      'intersection' => new HTMLRestrictions(['*' => ['bar' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE], 'foo' => FALSE]]),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => TRUE, 'dir' => TRUE]]),
+    ];
+
+    // Global attribute `*` HTML tag + concrete tag.
+    yield 'global attribute tag + concrete tag' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'b' => new HTMLRestrictions(['p' => FALSE]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], 'p' => FALSE]),
+    ];
+    yield 'global attribute tag + concrete tag — vice versa' => [
+      'a' => new HTMLRestrictions(['p' => FALSE]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], 'p' => FALSE]),
+    ];
+    yield 'global attribute tag + concrete tag with allowed attribute' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'b' => new HTMLRestrictions(['p' => ['baz' => TRUE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], 'p' => ['baz' => TRUE]]),
+    ];
+    yield 'global attribute tag + concrete tag with allowed attribute — vice versa' => [
+      'a' => new HTMLRestrictions(['p' => ['baz' => TRUE]]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], 'p' => ['baz' => TRUE]]),
+    ];
+
+    // Global attribute `*` HTML tag + wildcard tag.
+    yield 'global attribute tag + wildcard tag' => [
+      'a' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'b' => new HTMLRestrictions(['$text-container' => ['class' => TRUE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], '$text-container' => ['class' => TRUE]]),
+    ];
+    yield 'global attribute tag + wildcard tag — vice versa' => [
+      'a' => new HTMLRestrictions(['$text-container' => ['class' => TRUE]]),
+      'b' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE]]),
+      'diff' => 'a',
+      'intersection' => HTMLRestrictions::emptySet(),
+      'union' => new HTMLRestrictions(['*' => ['foo' => TRUE, 'bar' => FALSE], '$text-container' => ['class' => TRUE]]),
+    ];
   }
 
   /**
    * @covers ::getWildcardSubset
    * @covers ::getConcreteSubset
+   * @covers ::getPlainTagsSubset()
+   * @covers ::extractPlainTagsSubset()
    * @dataProvider providerSubsets
    */
-  public function testSubsets(HTMLRestrictions $input, HTMLRestrictions $expected_wildcard_subset, HTMLRestrictions $expected_concrete_subset): void {
+  public function testSubsets(HTMLRestrictions $input, HTMLRestrictions $expected_wildcard_subset, HTMLRestrictions $expected_concrete_subset, HTMLRestrictions $expected_plain_tags_subset, HTMLRestrictions $expected_extracted_plain_tags_subset): void {
     $this->assertEquals($expected_wildcard_subset, $input->getWildcardSubset());
     $this->assertEquals($expected_concrete_subset, $input->getConcreteSubset());
+    $this->assertEquals($expected_plain_tags_subset, $input->getPlainTagsSubset());
+    $this->assertEquals($expected_extracted_plain_tags_subset, $input->extractPlainTagsSubset());
   }
 
   public function providerSubsets(): \Generator {
     yield 'empty set' => [
+      new HTMLRestrictions([]),
+      new HTMLRestrictions([]),
       new HTMLRestrictions([]),
       new HTMLRestrictions([]),
       new HTMLRestrictions([]),
@@ -1134,17 +1517,39 @@ class HTMLRestrictionsTest extends UnitTestCase {
       new HTMLRestrictions(['div' => FALSE]),
       new HTMLRestrictions([]),
       new HTMLRestrictions(['div' => FALSE]),
+      new HTMLRestrictions(['div' => FALSE]),
+      new HTMLRestrictions(['div' => FALSE]),
+    ];
+
+    yield 'without wildcards with attributes' => [
+      new HTMLRestrictions(['div' => ['foo' => ['bar' => TRUE]]]),
+      new HTMLRestrictions([]),
+      new HTMLRestrictions(['div' => ['foo' => ['bar' => TRUE]]]),
+      new HTMLRestrictions([]),
+      new HTMLRestrictions(['div' => FALSE]),
     ];
 
     yield 'with wildcards' => [
-      new HTMLRestrictions(['div' => FALSE, '$text-container' => ['data-llama' => TRUE]]),
+      new HTMLRestrictions(['div' => FALSE, '$text-container' => ['data-llama' => TRUE], '*' => ['on*' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
       new HTMLRestrictions(['$text-container' => ['data-llama' => TRUE]]),
+      new HTMLRestrictions(['div' => FALSE, '*' => ['on*' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
       new HTMLRestrictions(['div' => FALSE]),
+      new HTMLRestrictions(['div' => FALSE]),
+    ];
+
+    yield 'wildcards and global attribute tag' => [
+      new HTMLRestrictions(['$text-container' => ['data-llama' => TRUE], '*' => ['on*' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      new HTMLRestrictions(['$text-container' => ['data-llama' => TRUE]]),
+      new HTMLRestrictions(['*' => ['on*' => FALSE, 'dir' => ['ltr' => TRUE, 'rtl' => TRUE]]]),
+      new HTMLRestrictions([]),
+      new HTMLRestrictions([]),
     ];
 
     yield 'only wildcards' => [
       new HTMLRestrictions(['$text-container' => ['data-llama' => TRUE]]),
       new HTMLRestrictions(['$text-container' => ['data-llama' => TRUE]]),
+      new HTMLRestrictions([]),
+      new HTMLRestrictions([]),
       new HTMLRestrictions([]),
     ];
   }

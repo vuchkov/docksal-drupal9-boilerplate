@@ -2,9 +2,11 @@
 
 namespace Drupal\Tests\user\Functional;
 
+use Drupal\Core\Test\AssertMailTrait;
 use Drupal\Core\Url;
 use Drupal\Tests\BrowserTestBase;
 use Drupal\user\Entity\User;
+use Drupal\user\UserInterface;
 
 /**
  * Ensure that login works as expected.
@@ -12,6 +14,10 @@ use Drupal\user\Entity\User;
  * @group user
  */
 class UserLoginTest extends BrowserTestBase {
+
+  use AssertMailTrait {
+    getMails as drupalGetMails;
+  }
 
   /**
    * {@inheritdoc}
@@ -74,6 +80,13 @@ class UserLoginTest extends BrowserTestBase {
     // A login with the correct password should also result in a flood error
     // message.
     $this->assertFailedLogin($user1, 'ip');
+
+    // A login attempt after resetting the password should still fail, since the
+    // IP-based flood control count is not cleared after a password reset.
+    $this->resetUserPassword($user1);
+    $this->drupalLogout();
+    $this->assertFailedLogin($user1, 'ip');
+    $this->assertSession()->responseContains('Too many failed login attempts from your IP address.');
   }
 
   /**
@@ -97,7 +110,8 @@ class UserLoginTest extends BrowserTestBase {
       $this->assertFailedLogin($incorrect_user1);
     }
 
-    // A successful login will reset the per-user flood control count.
+    // We're not going to test resetting the password which should clear the
+    // flood table and allow the user to log in again.
     $this->drupalLogin($user1);
     $this->drupalLogout();
 
@@ -114,16 +128,22 @@ class UserLoginTest extends BrowserTestBase {
     // Try one more attempt for user 1, it should be rejected, even if the
     // correct password has been used.
     $this->assertFailedLogin($user1, 'user');
+    $this->resetUserPassword($user1);
+    $this->drupalLogout();
+
+    // Try to log in as user 1, it should be successful.
+    $this->drupalLogin($user1);
+    $this->assertSession()->responseContains('Member for');
   }
 
   /**
    * Tests user password is re-hashed upon login after changing $count_log2.
    */
   public function testPasswordRehashOnLogin() {
-    // Determine default log2 for phpass hashing algorithm
+    // Determine default log2 for phpass hashing algorithm.
     $default_count_log2 = 16;
 
-    // Retrieve instance of password hashing algorithm
+    // Retrieve instance of password hashing algorithm.
     $password_hasher = $this->container->get('password');
 
     // Create a new user and authenticate.
@@ -150,6 +170,67 @@ class UserLoginTest extends BrowserTestBase {
     $account = $user_storage->load($account->id());
     $this->assertSame($overridden_count_log2, $password_hasher->getCountLog2($account->getPassword()));
     $this->assertTrue($password_hasher->check($password, $account->getPassword()));
+  }
+
+  /**
+   * Tests log in with a maximum length and a too long password.
+   */
+  public function testPasswordLengthLogin() {
+    // Create a new user and authenticate.
+    $account = $this->drupalCreateUser([]);
+    $current_password = $account->passRaw;
+    $this->drupalLogin($account);
+
+    // Use the length specified in
+    // \Drupal\Core\Render\Element\Password::getInfo().
+    $length = 128;
+
+    $current_password = $this->doPasswordLengthLogin($account, $current_password, $length);
+    $this->assertSession()->pageTextNotContains('Password cannot be longer than');
+    $this->assertSession()->pageTextContains('Member for');
+
+    $this->doPasswordLengthLogin($account, $current_password, $length + 1);
+    $this->assertSession()->pageTextContains('Password cannot be longer than ' . $length . ' characters but is currently ' . ($length + 1) . ' characters long.');
+    $this->assertSession()->pageTextNotContains('Member for');
+  }
+
+  /**
+   * Helper to test log in with a maximum length password.
+   *
+   * @param \Drupal\user\UserInterface $account
+   *   An object containing the user account.
+   * @param string $current_password
+   *   The current password associated with the user.
+   * @param int $length
+   *   The length of the password.
+   *
+   * @return string
+   *   The new password associated with the user.
+   */
+  public function doPasswordLengthLogin(UserInterface $account, string $current_password, int $length) {
+    $new_password = \Drupal::service('password_generator')->generate($length);
+    $uid = $account->id();
+    $edit = [
+      'current_pass' => $current_password,
+      'mail' => $account->getEmail(),
+      'pass[pass1]' => $new_password,
+      'pass[pass2]' => $new_password,
+    ];
+
+    // Change the password.
+    $this->drupalGet("user/$uid/edit");
+    $this->submitForm($edit, 'Save');
+    $this->assertSession()->pageTextContains('The changes have been saved.');
+    $this->drupalLogout();
+
+    // Login with new password.
+    $this->drupalGet('user/login');
+    $edit = [
+      'name' => $account->getAccountName(),
+      'pass' => $new_password,
+    ];
+    $this->submitForm($edit, 'Log in');
+    return $new_password;
   }
 
   /**
@@ -217,6 +298,7 @@ class UserLoginTest extends BrowserTestBase {
         ->fetchField();
       if ($flood_trigger == 'user') {
         $this->assertSession()->pageTextMatches("/There (has|have) been more than \w+ failed login attempt.* for this account. It is temporarily blocked. Try again later or request a new password./");
+        $this->assertSession()->elementExists('css', 'body.maintenance-page');
         $this->assertSession()->linkExists("request a new password");
         $this->assertSession()->linkByHrefExists(Url::fromRoute('user.pass')->toString());
         $this->assertEquals('Flood control blocked login attempt for uid %uid from %ip', $last_log, 'A watchdog message was logged for the login attempt blocked by flood control per user.');
@@ -224,6 +306,7 @@ class UserLoginTest extends BrowserTestBase {
       else {
         // No uid, so the limit is IP-based.
         $this->assertSession()->pageTextContains("Too many failed login attempts from your IP address. This IP address is temporarily blocked. Try again later or request a new password.");
+        $this->assertSession()->elementExists('css', 'body.maintenance-page');
         $this->assertSession()->linkExists("request a new password");
         $this->assertSession()->linkByHrefExists(Url::fromRoute('user.pass')->toString());
         $this->assertEquals('Flood control blocked login attempt from %ip', $last_log, 'A watchdog message was logged for the login attempt blocked by flood control per IP.');
@@ -234,6 +317,25 @@ class UserLoginTest extends BrowserTestBase {
       $this->assertSession()->fieldValueEquals('pass', '');
       $this->assertSession()->pageTextContains('Unrecognized username or password. Forgot your password?');
     }
+  }
+
+  /**
+   * Reset user password.
+   *
+   * @param object $user
+   *   A user object.
+   */
+  public function resetUserPassword($user) {
+    $this->drupalGet('user/password');
+    $edit['name'] = $user->getDisplayName();
+    $this->submitForm($edit, 'Submit');
+    $_emails = $this->drupalGetMails();
+    $email = end($_emails);
+    $urls = [];
+    preg_match('#.+user/reset/.+#', $email['body'], $urls);
+    $resetURL = $urls[0];
+    $this->drupalGet($resetURL);
+    $this->submitForm([], 'Log in');
   }
 
 }

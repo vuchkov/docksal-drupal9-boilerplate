@@ -82,6 +82,10 @@ class SelectComplexTest extends DatabaseTestBase {
     $task_field = $query->addField('t', 'task');
     $query->orderBy($count_field);
     $query->groupBy($task_field);
+
+    $this->assertMatchesRegularExpression("/ORDER BY .*[^\w\s]num[^\w\s]/", (string) $query);
+    $this->assertMatchesRegularExpression("/GROUP BY .*[^\w\s]task[^\w\s]/", (string) $query);
+
     $result = $query->execute();
 
     $num_records = 0;
@@ -238,7 +242,7 @@ class SelectComplexTest extends DatabaseTestBase {
     // Check that the ordering clause is handled properly.
     $orderby = $query->getOrderBy();
     // The orderby string is different for PostgreSQL.
-    // @see Drupal\Core\Database\Driver\pgsql\Select::orderBy()
+    // @see Drupal\pgsql\Driver\Database\pgsql\Select::orderBy()
     $db_type = Database::getConnection()->databaseType();
     $this->assertEquals($db_type == 'pgsql' ? 'ASC NULLS FIRST' : 'ASC', $orderby['name'], 'Query correctly sets ordering clause.');
     $orderby = $count->getOrderBy();

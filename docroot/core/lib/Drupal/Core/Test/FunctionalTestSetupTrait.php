@@ -42,7 +42,7 @@ trait FunctionalTestSetupTrait {
   /**
    * The class loader to use for installation and initialization of setup.
    *
-   * @var \Symfony\Component\Classloader\Classloader
+   * @var \Composer\Autoload\ClassLoader
    */
   protected $classLoader;
 
@@ -207,7 +207,7 @@ trait FunctionalTestSetupTrait {
     // Rebuild the kernel and bring it back to a fully bootstrapped state.
     $this->container = $this->kernel->rebuildContainer();
 
-    // Make sure the url generator has a request object, otherwise calls to
+    // Make sure the URL generator has a request object, otherwise calls to
     // $this->drupalGet() will fail.
     $this->prepareRequestForGenerator();
   }
@@ -236,12 +236,12 @@ trait FunctionalTestSetupTrait {
    *
    * This is used to manipulate how the generator generates paths during tests.
    * It also ensures that calls to $this->drupalGet() will work when running
-   * from run-tests.sh because the url generator no longer looks at the global
+   * from run-tests.sh because the URL generator no longer looks at the global
    * variables that are set there but relies on getting this information from a
    * request object.
    *
    * @param bool $clean_urls
-   *   Whether to mock the request using clean urls.
+   *   Whether to mock the request using clean URLs.
    * @param array $override_server_vars
    *   An array of server variables to override.
    *
@@ -516,6 +516,7 @@ trait FunctionalTestSetupTrait {
     $driver = $connection_info['default']['driver'];
     unset($connection_info['default']['driver']);
     unset($connection_info['default']['namespace']);
+    unset($connection_info['default']['autoload']);
     unset($connection_info['default']['pdo']);
     unset($connection_info['default']['init_commands']);
     // Remove database connection info that is not used by SQLite.
@@ -547,8 +548,9 @@ trait FunctionalTestSetupTrait {
               'pass2' => $this->rootUser->pass_raw ?? $this->rootUser->passRaw,
             ],
           ],
-          // form_type_checkboxes_value() requires NULL instead of FALSE values
-          // for programmatic form submissions to disable a checkbox.
+          // \Drupal\Core\Render\Element\Checkboxes::valueCallback() requires
+          // NULL instead of FALSE values for programmatic form submissions to
+          // disable a checkbox.
           'enable_update_status_module' => NULL,
           'enable_update_status_emails' => NULL,
         ],
@@ -620,11 +622,6 @@ trait FunctionalTestSetupTrait {
    *
    * Also sets up new resources for the testing environment, such as the public
    * filesystem and configuration directories.
-   *
-   * This method is private as it must only be called once by
-   * BrowserTestBase::setUp() (multiple invocations for the same test would have
-   * unpredictable consequences) and it must not be callable or overridable by
-   * test classes.
    */
   protected function prepareEnvironment() {
     // Bootstrap Drupal so we can use Drupal's built in functions.

@@ -5,8 +5,9 @@ namespace Drupal\Core\Database;
 /**
  * An implementation of StatementInterface that prefetches all data.
  *
- * This class behaves very similar to a \PDOStatement but as it always fetches
- * every row it is possible to manipulate those results.
+ * This class behaves very similar to a StatementWrapper of a \PDOStatement
+ * but as it always fetches every row it is possible to manipulate those
+ * results.
  */
 class StatementPrefetch implements \Iterator, StatementInterface {
 
@@ -67,7 +68,7 @@ class StatementPrefetch implements \Iterator, StatementInterface {
   protected $columnNames = NULL;
 
   /**
-   * The number of rows affected by the last query.
+   * The number of rows matched by the last query.
    *
    * @var int
    */
@@ -138,7 +139,7 @@ class StatementPrefetch implements \Iterator, StatementInterface {
    * @param array $driver_options
    *   Driver-specific options.
    * @param bool $row_count_enabled
-   *   (optional) Enables counting the rows affected. Defaults to FALSE.
+   *   (optional) Enables counting the rows matched. Defaults to FALSE.
    */
   public function __construct(\PDO $pdo_connection, Connection $connection, $query, array $driver_options = [], bool $row_count_enabled = FALSE) {
     $this->pdoConnection = $pdo_connection;
@@ -224,7 +225,7 @@ class StatementPrefetch implements \Iterator, StatementInterface {
     // as soon as possible.
     $this->data = $statement->fetchAll(\PDO::FETCH_ASSOC);
     // Destroy the statement as soon as possible. See the documentation of
-    // \Drupal\Core\Database\Driver\sqlite\Statement for an explanation.
+    // \Drupal\sqlite\Driver\Database\sqlite\Statement for an explanation.
     unset($statement);
 
     $this->resultRowCount = count($this->data);

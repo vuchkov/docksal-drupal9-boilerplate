@@ -5,3 +5,7 @@
 docker-compose.yml
 docroot/sites/*/settings.local.php
 docroot/sites/*/files
+
+
+docroot/modules/custom/
+docroot/themes/custom/
