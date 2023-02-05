@@ -1,4 +1,4 @@
-uuid: 72c43208-d0e7-4a97-a8b1-1952200e1b09
+uuid: 0453e758-a469-4721-932d-291c3f976b1b
 langcode: en
 status: true
 dependencies:
@@ -8,7 +8,7 @@ dependencies:
     - field.field.node.article.comment
     - field.field.node.article.field_image
     - field.field.node.article.field_tags
-    - image.style.large
+    - image.style.wide
     - node.type.article
   module:
     - comment
@@ -16,7 +16,7 @@ dependencies:
     - text
     - user
 _core:
-  default_config_hash: b4RQ-Nfz-gOoG_jjftd_qDIz4lf_-OzlxoLHkRXjfrE
+  default_config_hash: 7fb0j9HnIXfP9ndewzgPPzzeX_SV532wuYpkscrCMCk
 id: node.article.default
 targetEntityType: node
 bundle: article
@@ -42,8 +42,8 @@ content:
     type: image
     label: hidden
     settings:
+      image_style: wide
       image_link: ''
-      image_style: large
       image_loading:
         attribute: lazy
     third_party_settings: {  }

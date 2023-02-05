@@ -1,4 +1,4 @@
-uuid: 8b936044-a438-4bf7-a882-320b427d1843
+uuid: 3e379745-29c1-453c-abd7-93dd6e8e4577
 langcode: en
 status: true
 dependencies:
@@ -9,7 +9,7 @@ dependencies:
     - node
     - user
 _core:
-  default_config_hash: XEFoA1ECJzKZN4VpnDqqRQO-oltuYdmjjvGEYDKs8uU
+  default_config_hash: 6eeliKIydPjqyv5V__QqTfahvJMWkHjOVUUuUIdB1ik
 id: frontpage
 label: Frontpage
 module: node
@@ -98,7 +98,7 @@ display:
           plugin_id: title
           label: ''
           empty: true
-          title: 'Welcome to [site:name]'
+          title: Welcome!
       sorts:
         sticky:
           id: sticky
